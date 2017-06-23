@@ -23,7 +23,7 @@ public class ThumbnailDownloader<T> extends HandlerThread {
     private ConcurrentMap<T, String> mRequestMap = new ConcurrentHashMap<>();
 
     public interface ThumbnailDownloadListener<T> {
-        void onThumbnailDownloaded(T target, Bitmap thumbnail);
+        void onThumbnailDownloaded(T target, Bitmap thumbnail, String key);
     }
 
     public void setThumbnailDownloadListener
@@ -80,7 +80,7 @@ public class ThumbnailDownloader<T> extends HandlerThread {
                     }
                     mRequestMap.remove(target);
                     mThumbnailDownloadListener.onThumbnailDownloaded(target,
-                            bitmap);
+                            bitmap, url);
                 }
             });
         } catch (IOException ioe) {

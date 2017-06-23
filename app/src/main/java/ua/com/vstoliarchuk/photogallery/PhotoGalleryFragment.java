@@ -1,17 +1,24 @@
 package ua.com.vstoliarchuk.photogallery;
 
+import android.content.Context;
 import android.graphics.Bitmap;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.AsyncTask;
 import android.os.Bundle;
 import android.os.Handler;
+import android.preference.PreferenceManager;
 import android.support.annotation.Nullable;
 import android.support.v4.app.Fragment;
 import android.support.v7.widget.GridLayoutManager;
 import android.support.v7.widget.RecyclerView;
+import android.support.v7.widget.SearchView;
 import android.util.Log;
+import android.util.LruCache;
 import android.view.LayoutInflater;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
@@ -30,6 +37,7 @@ public class PhotoGalleryFragment extends Fragment {
     private ThumbnailDownloader<PhotoHolder> mThumbnailDownloader;
     private static final String TAG = "PhotoGalleryFragment";
     private RecyclerView mPhotoRecyclerView;
+    private LruCache<String, Bitmap> mPhotoCache;
 
     public static PhotoGalleryFragment newInstance() {
         return new PhotoGalleryFragment();
@@ -38,8 +46,16 @@ public class PhotoGalleryFragment extends Fragment {
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        setHasOptionsMenu(true);
         setRetainInstance(true);
-        new FetchItemsTask().execute();
+        updateItems();
+        int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
+        mPhotoCache = new LruCache<String, Bitmap>(maxMemory / 8) {
+            @Override
+            protected int sizeOf(String key, Bitmap value) {
+                return value.getByteCount() / 1024;
+            }
+        };
 
         Handler responseHandler = new Handler();
         mThumbnailDownloader = new ThumbnailDownloader<>(responseHandler);
@@ -47,15 +63,62 @@ public class PhotoGalleryFragment extends Fragment {
                 new ThumbnailDownloader.ThumbnailDownloadListener<PhotoHolder>() {
                     @Override
                     public void onThumbnailDownloaded(PhotoHolder photoHolder,
-                                                      Bitmap bitmap) {
+                                                      Bitmap bitmap, String key) {
                         Drawable drawable = new BitmapDrawable(getResources(),
                                 bitmap);
+                        addBitmapToMemCache(key, bitmap);
                         photoHolder.bindDrawable(drawable);
                     }
                 });
         mThumbnailDownloader.start();
         mThumbnailDownloader.getLooper();
         Log.i(TAG, "Background thread started");
+    }
+
+    @Override
+    public void onCreateOptionsMenu(Menu menu, MenuInflater inflater) {
+        super.onCreateOptionsMenu(menu, inflater);
+        inflater.inflate(R.menu.fragment_photo_gallery, menu);
+        MenuItem searchItem = menu.findItem(R.id.menu_item_search);
+        final SearchView searchView = (SearchView) searchItem.getActionView();
+        searchView.setOnQueryTextListener(new SearchView.OnQueryTextListener() {
+            @Override
+            public boolean onQueryTextSubmit(String query) {
+                QueryPreferences.setStoredQuery(getActivity(), query);
+                updateItems();
+                searchView.clearFocus();
+                return true;
+            }
+
+            @Override
+            public boolean onQueryTextChange(String newText) {
+                return false;
+            }
+        });
+        searchView.setOnSearchClickListener(new View.OnClickListener() {
+            @Override
+            public void onClick(View v) {
+                String query = QueryPreferences.getStoredQuery(getActivity());
+                searchView.setQuery(query, false);
+            }
+        });
+    }
+
+    @Override
+    public boolean onOptionsItemSelected(MenuItem item) {
+        switch (item.getItemId()) {
+            case R.id.menu_item_clear:
+                QueryPreferences.setStoredQuery(getActivity(), null);
+                updateItems();
+                return true;
+            default:
+                return super.onOptionsItemSelected(item);
+        }
+    }
+
+    private void updateItems() {
+        String query = QueryPreferences.getStoredQuery(getActivity()); // Для тестирования
+        new FetchItemsTask(query).execute();
     }
 
     @Override
@@ -84,10 +147,20 @@ public class PhotoGalleryFragment extends Fragment {
 
 
     private class FetchItemsTask extends AsyncTask<Void, Void, List<GalleryItem>> {
+        private String mQuery;
+        public FetchItemsTask(String query) {
+            super();
+            mQuery = query;
+        }
 
         @Override
         protected List<GalleryItem> doInBackground(Void... params) {
-            return new FlickrFetchr().fetchItems();
+
+            if (mQuery == null) {
+                return new FlickrFetchr().fetchRecentPhotos();
+            } else {
+                return new FlickrFetchr().searchPhotos(mQuery);
+            }
         }
 
         @Override
@@ -116,7 +189,8 @@ public class PhotoGalleryFragment extends Fragment {
     @Override
     public void onDestroyView() {
         super.onDestroyView();
-        mThumbnailDownloader.clearQueue();}
+        mThumbnailDownloader.clearQueue();
+    }
 
     private class PhotoAdapter extends RecyclerView.Adapter<PhotoHolder> {
         private List<GalleryItem> mGalleryItems;
@@ -135,12 +209,19 @@ public class PhotoGalleryFragment extends Fragment {
         @Override
         public void onBindViewHolder(PhotoHolder photoHolder, int position) {
             GalleryItem galleryItem = mGalleryItems.get(position);
-            Drawable placeholder = getResources().getDrawable
-                    (R.drawable.placeholder);
 
-            photoHolder.bindDrawable(placeholder);
-            mThumbnailDownloader.queueThumbnail(photoHolder,
-                    galleryItem.getUrl());
+            String key = galleryItem.getUrl();
+            Bitmap bitmap = mPhotoCache.get(key);
+            if (bitmap != null) {
+                Drawable drawable = new BitmapDrawable(getResources(), bitmap);
+                photoHolder.bindDrawable(drawable);
+            } else {
+                Drawable placeholder = getResources().getDrawable
+                        (R.drawable.placeholder);
+                photoHolder.bindDrawable(placeholder);
+                mThumbnailDownloader.queueThumbnail(photoHolder,
+                        galleryItem.getUrl());
+            }
         }
 
         @Override
@@ -148,5 +229,17 @@ public class PhotoGalleryFragment extends Fragment {
             return mGalleryItems.size();
         }
     }
+
+
+    private Bitmap getBitmapFromMemCache(String key) {
+        return mPhotoCache.get(key);
+    }
+
+    private void addBitmapToMemCache(String key, Bitmap bitmap) {
+        if (null == getBitmapFromMemCache(key)) {
+            mPhotoCache.put(key, bitmap);
+        }
+    }
+
 
 }
