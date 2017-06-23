@@ -22,6 +22,7 @@ import android.view.MenuItem;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -38,6 +39,7 @@ public class PhotoGalleryFragment extends Fragment {
     private static final String TAG = "PhotoGalleryFragment";
     private RecyclerView mPhotoRecyclerView;
     private LruCache<String, Bitmap> mPhotoCache;
+    private ProgressBar mProgressBar;
 
     public static PhotoGalleryFragment newInstance() {
         return new PhotoGalleryFragment();
@@ -48,7 +50,6 @@ public class PhotoGalleryFragment extends Fragment {
         super.onCreate(savedInstanceState);
         setHasOptionsMenu(true);
         setRetainInstance(true);
-        updateItems();
         int maxMemory = (int) (Runtime.getRuntime().maxMemory() / 1024);
         mPhotoCache = new LruCache<String, Bitmap>(maxMemory / 8) {
             @Override
@@ -132,10 +133,12 @@ public class PhotoGalleryFragment extends Fragment {
     @Override
     public View onCreateView(LayoutInflater inflater, @Nullable ViewGroup container, @Nullable Bundle savedInstanceState) {
         View v = inflater.inflate(R.layout.fragment_photo_gallery, container, false);
+        mProgressBar = (ProgressBar) v.findViewById(R.id.progress_bar);
 
         mPhotoRecyclerView = (RecyclerView) v.findViewById(R.id.fragment_photo_gallery_recycler_view);
         mPhotoRecyclerView.setLayoutManager(new GridLayoutManager(getActivity(), 3));
         setupAdapter();
+        updateItems();
         return v;
     }
 
@@ -152,7 +155,12 @@ public class PhotoGalleryFragment extends Fragment {
             super();
             mQuery = query;
         }
-
+        @Override
+        protected void onPreExecute(){
+            mPhotoRecyclerView.setVisibility(View.GONE);
+            mProgressBar.setVisibility(ProgressBar.VISIBLE);
+            mProgressBar.getIndeterminateDrawable().setColorFilter(getResources().getColor(R.color.colorPrimary), android.graphics.PorterDuff.Mode.SRC_IN);
+        }
         @Override
         protected List<GalleryItem> doInBackground(Void... params) {
 
@@ -167,6 +175,8 @@ public class PhotoGalleryFragment extends Fragment {
         protected void onPostExecute(List<GalleryItem> items) {
             mItems = items;
             setupAdapter();
+            mProgressBar.setVisibility(View.GONE);
+            mPhotoRecyclerView.setVisibility(View.VISIBLE);
         }
 
 
